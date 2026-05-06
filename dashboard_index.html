@@ -1,0 +1,82 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>The Shift Dashboard</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+:root{--brand:#ff7a00;--brand2:#ffb347;--muted:#666;--card:#fff8f0}
+*{box-sizing:border-box}
+body{font-family:Arial,Helvetica,sans-serif;margin:0;background:#fafafa;color:#222}
+header{background:linear-gradient(90deg,var(--brand),var(--brand2));color:#fff;padding:18px;text-align:center}
+nav{display:flex;gap:8px;flex-wrap:wrap;justify-content:center;background:#f2f2f2;padding:10px}
+nav button{background:var(--brand);color:#fff;border:none;padding:10px 12px;border-radius:6px;cursor:pointer;font-weight:700}
+.container{max-width:1050px;margin:18px auto;padding:0 12px}
+.card{background:#fff;padding:14px;border-radius:10px;margin-bottom:12px;border:1px solid #eee;box-shadow:0 4px 14px rgba(0,0,0,.04)}
+label{font-weight:700;display:block;margin:10px 0 6px}
+input,select,textarea{width:100%;padding:10px;border-radius:6px;border:1px solid #ddd}
+textarea{min-height:110px}
+button{background:var(--brand);color:#fff;border:none;padding:10px 12px;border-radius:6px;cursor:pointer}
+.preview{background:#fff8e6;padding:10px;border-radius:6px;min-height:60px;white-space:pre-wrap;margin-top:8px}
+.row{display:flex;gap:10px}.col{flex:1}.small{font-size:13px;color:var(--muted)}
+.stats{display:flex;gap:10px;flex-wrap:wrap}.stat{flex:1;min-width:160px;background:#fff3e0;padding:12px;border-radius:8px;text-align:center}
+.section{display:none}.section.active{display:block}
+.notice{background:#eef8ff;border-left:4px solid #3b82f6;padding:10px;border-radius:8px;margin-bottom:12px}
+@media(max-width:700px){.row{flex-direction:column}.stats{flex-direction:column}}
+</style>
+</head>
+<body>
+<header><strong>THE SHIFT</strong><div class="small" style="color:#fff;margin-top:6px">Communication + Voice Outreach + Monitoring Dashboard</div></header>
+<nav>
+<button onclick="show('wa')">WhatsApp Campaign</button>
+<button onclick="show('voice')">Robo Call Campaign</button>
+<button onclick="show('logs')">Compliance Logs</button>
+</nav>
+<div class="container">
+<div class="notice"><strong>Compliance-ready flow:</strong> throttling, sender rotation, opt-out handling, and Firestore logs are included in the backend starter.</div>
+<section id="wa" class="section active">
+<div class="card">
+<h2>WhatsApp Campaign</h2>
+<label>Campaign Name</label><input id="campaignName" placeholder="e.g. I AM APC - Uyo Ward Push">
+<label>Target LGA</label><select id="waLga"><option value="Uyo">Uyo</option><option value="Ikot Ekpene">Ikot Ekpene</option><option value="Eket">Eket</option></select>
+<label>Message Template</label><textarea id="waMessage" placeholder="Use {name} to personalize"></textarea>
+<div class="row" style="margin-top:10px"><div class="col"><button onclick="previewWA()">Preview</button></div><div class="col"><button onclick="submitCampaign()">Enqueue WhatsApp Campaign</button></div></div>
+<div class="preview" id="previewBox">Preview will show here</div>
+</div>
+</section>
+<section id="voice" class="section">
+<div class="card">
+<h2>Robo Call Campaign</h2>
+<p class="small">Recommended recording ending: “To stop receiving these calls, press 2.” The callback handler will mark the number as opted out.</p>
+<label>Campaign Name</label><input id="voiceCampaignName" placeholder="e.g. Governor Voice - Eket">
+<label>Target LGA</label><select id="voiceLga"><option value="Uyo">Uyo</option><option value="Ikot Ekpene">Ikot Ekpene</option><option value="Eket">Eket</option></select>
+<label>Voice File URL</label><input id="voiceUrl" placeholder="https://.../recorded-message.mp3">
+<label>Throttle Speed</label><select id="voiceThrottle"><option value="1000">1 call / second</option><option value="2000">1 call / 2 seconds</option><option value="5000">1 call / 5 seconds</option></select>
+<div class="row" style="margin-top:10px"><div class="col"><button onclick="previewVoice()">Preview Voice Campaign</button></div><div class="col"><button onclick="enqueueVoice()">Enqueue Robo Calls</button></div></div>
+<div class="preview" id="voicePreview">Voice preview will show here</div>
+</div>
+</section>
+<section id="logs" class="section">
+<div class="card">
+<h2>Compliance Logs</h2>
+<div class="stats">
+<div class="stat"><strong id="sent">0</strong><br><span class="small">WhatsApp Sent</span></div>
+<div class="stat"><strong id="voiceLogs">0</strong><br><span class="small">Voice Logs</span></div>
+<div class="stat"><strong id="optOuts">0</strong><br><span class="small">Opt-outs</span></div>
+</div>
+<div class="preview" style="margin-top:12px">Sample logs:
+• Voice callback received - Uyo - answered
+• DTMF 2 detected - recipient opted out
+• Sender line paused after daily limit</div>
+</div>
+</section>
+</div>
+<script>
+function show(id){document.querySelectorAll('.section').forEach(s=>s.classList.remove('active'));document.getElementById(id).classList.add('active');}
+function previewWA(){const lga=document.getElementById('waLga').value;const msg=document.getElementById('waMessage').value;document.getElementById('previewBox').innerText='Target: '+lga+'\n\n'+(msg||'(no message yet)');}
+function submitCampaign(){alert('Campaign will be sent to Firebase Functions after setup. See README-FIRST-RUN.md.');}
+function previewVoice(){const name=document.getElementById('voiceCampaignName').value||'Voice campaign';const lga=document.getElementById('voiceLga').value;const url=document.getElementById('voiceUrl').value||'(no URL yet)';const throttle=document.getElementById('voiceThrottle').value;document.getElementById('voicePreview').innerText='Campaign: '+name+'\nTarget: '+lga+'\nVoice file: '+url+'\nThrottle: '+throttle+'ms delay per call\nOpt-out key: 2 or 9';}
+function enqueueVoice(){alert('Voice campaign will use enqueueCall() after provider + Firebase setup.');}
+</script>
+</body>
+</html>

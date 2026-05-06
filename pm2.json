@@ -1,0 +1,11 @@
+{
+  "apps": [
+    {
+      "name": "wa-sender",
+      "script": "wa-sender.js",
+      "watch": false,
+      "instances": 1,
+      "exec_mode": "fork"
+    }
+  ]
+}
