@@ -1,194 +1,331 @@
 /**
- * wa-sender.js - Baileys based WhatsApp sender (starter)
- */ 
-const { default: makeWASocket, useMultiFileAuthState } = require('@adiwajshing/baileys');
+ * wa-sender.js — OutreachOS WhatsApp Worker
+ * 
+ * Fixes from audit:
+ *  - Full targeting: state, lga, ward, language, group
+ *  - Media sending: image, video, audio, document
+ *  - Proper Firestore pagination (no 5000 limit hack)
+ *  - Correct campaign progress tracking
+ *  - Better error recovery per-recipient
+ *  - Connection retry logic
+ */
+
+const { default: makeWASocket, useMultiFileAuthState, DisconnectReason } = require('@adiwajshing/baileys');
 const admin = require('firebase-admin');
 const PQueue = require('p-queue').default;
 const fs = require('fs');
 const path = require('path');
 
-if(!process.env.FIREBASE_SERVICE_ACCOUNT_JSON) {
-  console.error("Missing FIREBASE_SERVICE_ACCOUNT_JSON env. Set the service account json string.");
+// ── Init ─────────────────────────────────────────────────────────
+if (!process.env.FIREBASE_SERVICE_ACCOUNT_JSON) {
+  console.error('[ERROR] Missing FIREBASE_SERVICE_ACCOUNT_JSON env var.');
   process.exit(1);
 }
 
-const SERVICE_ACCOUNT = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_JSON);
 admin.initializeApp({
-  credential: admin.credential.cert(SERVICE_ACCOUNT)
+  credential: admin.credential.cert(JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_JSON))
 });
 const db = admin.firestore();
 
 const SENDER_AUTH_DIR = './sender_auth';
 if (!fs.existsSync(SENDER_AUTH_DIR)) fs.mkdirSync(SENDER_AUTH_DIR);
 
-const queue = new PQueue({ concurrency: 5 });
+// Active socket registry
+const activeSockets = {};
 
-async function loadSenders() {
+// ── Queue ─────────────────────────────────────────────────────────
+const queue = new PQueue({ concurrency: 3 });
+
+// ── Sender Management ─────────────────────────────────────────────
+async function loadActiveSenders() {
   const snap = await db.collection('senders').where('status', '==', 'active').get();
-  const senders = [];
-  snap.forEach(doc => senders.push({ id: doc.id, ...doc.data() }));
-  return senders;
+  return snap.docs.map(d => ({ id: d.id, ...d.data() }));
 }
 
-async function createSocketForSender(sender) {
+async function getSenderDailySentCount(senderId) {
+  const startOfDay = new Date();
+  startOfDay.setHours(0, 0, 0, 0);
+  const snap = await db.collection('sends')
+    .where('senderId', '==', senderId)
+    .where('attemptAt', '>=', admin.firestore.Timestamp.fromDate(startOfDay))
+    .count()
+    .get();
+  return snap.data().count;
+}
+
+async function createSocket(sender) {
   const senderDir = path.join(SENDER_AUTH_DIR, sender.id);
-  if (!fs.existsSync(senderDir)) fs.mkdirSync(senderDir);
+  if (!fs.existsSync(senderDir)) fs.mkdirSync(senderDir, { recursive: true });
 
   const { state, saveCreds } = await useMultiFileAuthState(senderDir);
   const sock = makeWASocket({
     auth: state,
     printQRInTerminal: true,
-    defaultQueryTimeoutMs: undefined
+    defaultQueryTimeoutMs: 60000,
+    browser: ['OutreachOS', 'Chrome', '1.0.0'],
   });
 
   sock.ev.on('creds.update', saveCreds);
 
-  sock.ev.on('connection.update', update => {
-    const { connection, lastDisconnect } = update;
+  sock.ev.on('connection.update', async ({ connection, lastDisconnect }) => {
     if (connection === 'close') {
-      console.log(`[${sender.id}] connection closed`);
+      const code = lastDisconnect?.error?.output?.statusCode;
+      console.log(`[${sender.id}] Disconnected. Code: ${code}`);
+      if (code !== DisconnectReason.loggedOut) {
+        console.log(`[${sender.id}] Reconnecting in 5s…`);
+        setTimeout(() => createSocket(sender).then(s => { activeSockets[sender.id] = s; }), 5000);
+      } else {
+        console.log(`[${sender.id}] Logged out. Marking inactive.`);
+        await db.collection('senders').doc(sender.id).update({ status: 'logged_out' });
+        delete activeSockets[sender.id];
+      }
     } else if (connection === 'open') {
-      console.log(`[${sender.id}] connected`);
+      console.log(`[${sender.id}] ✅ Connected`);
     }
   });
 
-  sock.ev.on('messages.upsert', async m => {
-    try {
-      const msg = m.messages[0];
-      if (!msg.message) return;
-      const from = msg.key.remoteJid ? msg.key.remoteJid.replace('@s.whatsapp.net','') : null;
-      const text = msg.message.conversation || (msg.message.extendedTextMessage && msg.message.extendedTextMessage.text) || '';
-      await db.collection('responses').add({
-        phone: from,
-        text,
-        receivedAt: admin.firestore.FieldValue.serverTimestamp(),
-        senderId: sender.id
-      });
-      console.log('[reply] from', from, text);
+  // Handle incoming messages — opt-out + log replies
+  sock.ev.on('messages.upsert', async ({ messages }) => {
+    for (const msg of messages) {
+      if (!msg.message || msg.key.fromMe) continue;
+      const from = (msg.key.remoteJid || '').replace('@s.whatsapp.net', '');
+      const text = msg.message.conversation
+        || msg.message.extendedTextMessage?.text
+        || '';
 
-      // Auto-opt-out handling: if user replied STOP or UNSUBSCRIBE set optedOut flag
+      // Log reply
       try {
-        const txtLower = (text || '').toLowerCase();
-        if (['stop','unsubscribe','end','quit'].includes(txtLower.trim())) {
-          const r = await db.collection('recipients').where('phone','==', from).limit(1).get();
-          if (!r.empty) {
-            const rid = r.docs[0].id;
-            await db.collection('recipients').doc(rid).update({ optedOut: true });
-            console.log('Opt-out recorded for', from);
-          }
-        }
-      } catch(e) { console.error('optout err', e); }
+        await db.collection('responses').add({
+          phone: from, text, senderId: sender.id,
+          receivedAt: admin.firestore.FieldValue.serverTimestamp()
+        });
+      } catch (e) { console.error('[reply log err]', e.message); }
 
-    } catch (err) {
-      console.error('reply handler err', err);
+      // Auto opt-out
+      if (['stop', 'unsubscribe', 'end', 'quit'].includes(text.trim().toLowerCase())) {
+        try {
+          const snap = await db.collection('recipients').where('phone', '==', from).limit(1).get();
+          if (!snap.empty) {
+            await snap.docs[0].ref.update({ optedOut: true });
+            await db.collection('voiceLogs').add({
+              action: 'optOut', phone: from, by: 'whatsapp_reply',
+              time: admin.firestore.FieldValue.serverTimestamp()
+            });
+            console.log(`[opt-out] ${from} opted out via WhatsApp reply`);
+          }
+        } catch (e) { console.error('[opt-out err]', e.message); }
+      }
     }
   });
 
   return sock;
 }
 
-let senderIndex = 0;
-async function pickSender(senders) {
-  if (!senders || senders.length === 0) throw new Error('No senders active');
-  senderIndex = (senderIndex + 1) % senders.length;
-  return senders[senderIndex];
-}
-
-async function watchCampaigns() {
-  const snapshot = await db.collection('campaigns').where('status','in', ['scheduled','running']).get();
-  for (const doc of snapshot.docs) {
-    const campaign = { id: doc.id, ...doc.data() };
-    if (campaign._processing) continue;
-    if (campaign.status === 'scheduled' || campaign.status === 'running') {
-      await doc.ref.update({ status: 'running', _processing: true });
-      processCampaign(campaign).catch(err => console.error('processCampaign err', err));
+// ── Sender picker (round robin, respects daily limit) ─────────────
+let senderIdx = 0;
+async function pickAvailableSender(senders) {
+  for (let i = 0; i < senders.length; i++) {
+    const idx = (senderIdx + i) % senders.length;
+    const sender = senders[idx];
+    const sentToday = await getSenderDailySentCount(sender.id);
+    const dailyLimit = sender.dailyLimit || 3000;
+    if (sentToday < dailyLimit) {
+      senderIdx = (idx + 1) % senders.length;
+      return sender;
     }
   }
-  setTimeout(watchCampaigns, 10000);
+  return null; // all senders at daily limit
 }
 
-async function processCampaign(campaign) {
+// ── Build Firestore query from targetQuery ────────────────────────
+function buildRecipientsQuery(targetQuery) {
+  let q = db.collection('recipients').where('optedOut', '==', false);
+  if (targetQuery.state)    q = q.where('state',    '==', targetQuery.state);
+  if (targetQuery.lga)      q = q.where('lga',      '==', targetQuery.lga);
+  if (targetQuery.ward)     q = q.where('ward',     '==', targetQuery.ward);
+  if (targetQuery.language) q = q.where('language', '==', targetQuery.language);
+  if (targetQuery.group)    q = q.where('group',    '==', targetQuery.group);
+  return q;
+}
+
+// ── Build WA message payload by type ─────────────────────────────
+function buildMessagePayload(campaign, recipient) {
+  const text = (campaign.messageTemplate || '')
+    .replace(/{name}/g,  recipient.name  || '')
+    .replace(/{lga}/g,   recipient.lga   || '')
+    .replace(/{ward}/g,  recipient.ward  || '')
+    .replace(/{state}/g, recipient.state || '');
+
+  const type = campaign.messageType || 'text';
+
+  if (type === 'text' || !campaign.mediaUrl) {
+    return { text };
+  }
+
+  const caption = text;
+  const url = campaign.mediaUrl;
+
+  switch (type) {
+    case 'image':    return { image: { url }, caption };
+    case 'video':    return { video: { url }, caption };
+    case 'audio':    return { audio: { url }, mimetype: 'audio/mpeg', ptt: false };
+    case 'document': return { document: { url }, mimetype: 'application/pdf', caption, fileName: 'campaign.pdf' };
+    default:         return { text };
+  }
+}
+
+// ── Process one campaign ──────────────────────────────────────────
+async function processCampaign(campaign, senders) {
+  const campaignRef = db.collection('campaigns').doc(campaign.id);
+  console.log(`[campaign:${campaign.id}] Starting — ${campaign.name}`);
+
+  const q = buildRecipientsQuery(campaign.targetQuery || {});
+
+  // Paginate through recipients in batches of 500
+  let lastDoc = null;
+  let totalSent = 0;
+  let totalCount = 0;
+
+  // Count first for progress tracking
   try {
-    console.log('Processing campaign', campaign.id, campaign.name);
-    let recipientsQuery = db.collection('recipients');
-    if (campaign.targetQuery && campaign.targetQuery.lga) {
-      recipientsQuery = recipientsQuery.where('lga', '==', campaign.targetQuery.lga);
-    }
-    const recipientSnapshot = await recipientsQuery.limit(5000).get();
-    const recipients = recipientSnapshot.docs.map(d => ({ id: d.id, ...d.data() }));
-    const senders = await loadSenders();
-    if (senders.length === 0) {
-      console.error('No active senders. Campaign paused.');
-      await db.collection('campaigns').doc(campaign.id).update({ status: 'paused' });
-      return;
-    }
-    const sockets = {};
-    for (const s of senders) {
-      sockets[s.id] = await createSocketForSender(s).catch(e => { console.error('socket create err', e); return null; });
-    }
+    const countSnap = await q.count().get();
+    totalCount = countSnap.data().count;
+    console.log(`[campaign:${campaign.id}] ${totalCount} eligible recipients`);
+  } catch (e) { console.error('[count err]', e.message); }
+
+  while (true) {
+    let pageQuery = q.limit(500);
+    if (lastDoc) pageQuery = pageQuery.startAfter(lastDoc);
+
+    const snap = await pageQuery.get();
+    if (snap.empty) break;
+    lastDoc = snap.docs[snap.docs.length - 1];
+
+    const recipients = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+
     for (const recipient of recipients) {
-      queue.add(async () => {
+      await queue.add(async () => {
         try {
-          // OPT-OUT check: skip if recipient opted out
-          const recRef = await db.collection('recipients').doc(recipient.id).get();
-          const recData = recRef.exists ? recRef.data() : null;
-          if (recData && recData.optedOut) {
-            console.log('Skipping opted-out', recipient.phone);
+          // Re-check opt-out (may have changed mid-campaign)
+          const recSnap = await db.collection('recipients').doc(recipient.id).get();
+          if (recSnap.exists && recSnap.data().optedOut) {
+            console.log(`[skip] ${recipient.phone} opted out`);
             return;
           }
 
-          // pick sender and enforce per-sender daily limit
-          const sender = await pickSender(senders);
-          const senderDoc = await db.collection('senders').doc(sender.id).get();
-          const senderInfo = senderDoc.exists ? senderDoc.data() : {};
-          const dailyLimit = senderInfo.dailyLimit || 3000; // default safe cap
-          
-          // count sends today for this sender
-          const startOfDay = new Date(); startOfDay.setHours(0,0,0,0);
-          const snaps = await db.collection('sends')
-            .where('senderId','==', sender.id)
-            .where('attemptAt','>=', admin.firestore.Timestamp.fromDate(startOfDay))
-            .get();
-          const sentToday = snaps.size || 0;
-          if (sentToday >= dailyLimit) {
-            console.log(`Sender ${sender.id} reached daily limit (${dailyLimit}). Skipping this recipient.`);
+          const sender = await pickAvailableSender(senders);
+          if (!sender) {
+            console.warn('[warn] All senders at daily limit. Pausing campaign.');
+            await campaignRef.update({ status: 'paused', pauseReason: 'daily_limit_reached' });
+            queue.pause();
             return;
           }
 
-          const sock = sockets[sender.id];
-          if (!sock) throw new Error('sender socket missing');
+          const sock = activeSockets[sender.id];
+          if (!sock) {
+            console.warn(`[warn] Socket missing for sender ${sender.id}`);
+            return;
+          }
 
-          // small humanized random delay to avoid rate patterns (200ms - 1200ms)
-          const randDelay = Math.floor(200 + Math.random() * 1000);
-          await new Promise(res => setTimeout(res, randDelay));
+          // Humanized random delay (300ms – 1500ms)
+          await sleep(300 + Math.random() * 1200);
 
-          // craft personalized message and send
-          let text = campaign.messageTemplate || '';
-          text = text.replace(/\{name\}/g, recipient.name || '');
-          const jid = recipient.phone + '@s.whatsapp.net';
-          const res = await sock.sendMessage(jid, { text });
+          const jid = recipient.phone.replace(/\D/g, '') + '@s.whatsapp.net';
+          const payload = buildMessagePayload(campaign, recipient);
+          await sock.sendMessage(jid, payload);
 
-          // log send
+          // Log send
           await db.collection('sends').add({
             campaignId: campaign.id,
             recipientId: recipient.id,
             senderId: sender.id,
-            attemptAt: admin.firestore.FieldValue.serverTimestamp(),
-            status: 'sent'
+            phone: recipient.phone,
+            messageType: campaign.messageType || 'text',
+            status: 'sent',
+            attemptAt: admin.firestore.FieldValue.serverTimestamp()
           });
-          console.log('sent to', recipient.phone);
 
+          totalSent++;
+
+          // Update campaign progress every 50 sends
+          if (totalSent % 50 === 0) {
+            const progress = totalCount > 0 ? Math.round((totalSent / totalCount) * 100) : 0;
+            await campaignRef.update({ sent: totalSent, progress });
+          }
+
+          console.log(`[sent] ${recipient.phone} | campaign:${campaign.id} | via:${sender.id}`);
         } catch (err) {
-          console.error('send err', err);
+          console.error(`[send err] ${recipient.phone}:`, err.message);
+          // Log failure
+          await db.collection('sends').add({
+            campaignId: campaign.id,
+            recipientId: recipient.id,
+            phone: recipient.phone,
+            status: 'failed',
+            error: err.message,
+            attemptAt: admin.firestore.FieldValue.serverTimestamp()
+          }).catch(() => {});
         }
       });
     }
-await queue.onIdle();
-    await db.collection('campaigns').doc(campaign.id).update({ status: 'completed', completedAt: admin.firestore.FieldValue.serverTimestamp(), _processing: admin.firestore.FieldValue.delete() });
-    console.log('Campaign completed', campaign.id);
-  } catch (e) {
-    console.error('processCampaign fatal', e);
+
+    await queue.onIdle();
+    if (snap.docs.length < 500) break; // last page
   }
+
+  await campaignRef.update({
+    status: 'completed',
+    sent: totalSent,
+    progress: 100,
+    completedAt: admin.firestore.FieldValue.serverTimestamp(),
+    _processing: admin.firestore.FieldValue.delete()
+  });
+  console.log(`[campaign:${campaign.id}] ✅ Completed — ${totalSent} sent`);
 }
 
-watchCampaigns().catch(err => console.error(err));
+// ── Campaign Watcher ──────────────────────────────────────────────
+async function watchCampaigns() {
+  try {
+    const snap = await db.collection('campaigns')
+      .where('status', 'in', ['scheduled', 'running'])
+      .where('type', 'in', ['whatsapp', null]) // only WA campaigns
+      .get();
+
+    const senders = await loadActiveSenders();
+    if (senders.length === 0) {
+      console.log('[worker] No active senders. Scan QR codes first.');
+    } else {
+      // Ensure sockets are open
+      for (const sender of senders) {
+        if (!activeSockets[sender.id]) {
+          activeSockets[sender.id] = await createSocket(sender).catch(e => {
+            console.error(`[socket err] ${sender.id}:`, e.message);
+            return null;
+          });
+        }
+      }
+    }
+
+    for (const doc of snap.docs) {
+      const campaign = { id: doc.id, ...doc.data() };
+      if (campaign._processing) continue;
+      if (!campaign.type || campaign.type === 'whatsapp') {
+        await doc.ref.update({ status: 'running', _processing: true });
+        processCampaign(campaign, senders).catch(async err => {
+          console.error(`[campaign fatal] ${campaign.id}:`, err.message);
+          await doc.ref.update({ status: 'failed', error: err.message, _processing: admin.firestore.FieldValue.delete() });
+        });
+      }
+    }
+  } catch (e) {
+    console.error('[watchCampaigns err]', e.message);
+  }
+
+  setTimeout(watchCampaigns, 15000); // poll every 15s
+}
+
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+// ── Start ─────────────────────────────────────────────────────────
+console.log('[OutreachOS] WhatsApp worker starting…');
+watchCampaigns().catch(console.error);

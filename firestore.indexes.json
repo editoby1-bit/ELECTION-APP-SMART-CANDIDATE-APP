@@ -1,0 +1,88 @@
+{
+  "indexes": [
+    {
+      "collectionGroup": "recipients",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "optedOut", "order": "ASCENDING" },
+        { "fieldPath": "state",    "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "recipients",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "optedOut", "order": "ASCENDING" },
+        { "fieldPath": "lga",      "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "recipients",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "optedOut",  "order": "ASCENDING" },
+        { "fieldPath": "state",     "order": "ASCENDING" },
+        { "fieldPath": "lga",       "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "recipients",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "optedOut",  "order": "ASCENDING" },
+        { "fieldPath": "state",     "order": "ASCENDING" },
+        { "fieldPath": "lga",       "order": "ASCENDING" },
+        { "fieldPath": "ward",      "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "recipients",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "optedOut",  "order": "ASCENDING" },
+        { "fieldPath": "language",  "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "recipients",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "optedOut",  "order": "ASCENDING" },
+        { "fieldPath": "group",     "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "sends",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "senderId",   "order": "ASCENDING" },
+        { "fieldPath": "attemptAt",  "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "campaigns",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "type",        "order": "ASCENDING" },
+        { "fieldPath": "status",      "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "campaigns",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "type",         "order": "ASCENDING" },
+        { "fieldPath": "scheduledAt",  "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "voiceLogs",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "action", "order": "ASCENDING" },
+        { "fieldPath": "time",   "order": "DESCENDING" }
+      ]
+    }
+  ],
+  "fieldOverrides": []
+}

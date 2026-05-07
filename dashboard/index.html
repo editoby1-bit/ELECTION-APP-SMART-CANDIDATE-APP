@@ -1,0 +1,1405 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>OutreachOS — Command Center</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet">
+
+<!-- Firebase SDK -->
+<script type="module">
+  import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js';
+  import { getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js';
+  import { getFirestore, collection, addDoc, getDocs, query, where, orderBy, limit, onSnapshot, doc, updateDoc, serverTimestamp, getCountFromServer } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js';
+
+  // ─── REPLACE WITH YOUR FIREBASE CONFIG ───────────────────────────────────────
+  const firebaseConfig = {
+    apiKey: "YOUR_API_KEY",
+    authDomain: "YOUR_PROJECT.firebaseapp.com",
+    projectId: "YOUR_PROJECT_ID",
+    storageBucket: "YOUR_PROJECT.appspot.com",
+    messagingSenderId: "YOUR_SENDER_ID",
+    appId: "YOUR_APP_ID"
+  };
+  // ─────────────────────────────────────────────────────────────────────────────
+
+  const app = initializeApp(firebaseConfig);
+  const auth = getAuth(app);
+  const db = getFirestore(app);
+
+  window.__firebaseAuth = auth;
+  window.__firebaseDB = db;
+  window.__firebaseModules = {
+    signInWithEmailAndPassword, signOut, onAuthStateChanged,
+    collection, addDoc, getDocs, query, where, orderBy, limit,
+    onSnapshot, doc, updateDoc, serverTimestamp, getCountFromServer
+  };
+
+  // Auth state watcher
+  onAuthStateChanged(auth, (user) => {
+    if (user) {
+      document.getElementById('loginScreen').style.display = 'none';
+      document.getElementById('appShell').style.display = 'flex';
+      document.getElementById('userEmail').textContent = user.email;
+      window.__currentUser = user;
+      initDashboard();
+    } else {
+      document.getElementById('loginScreen').style.display = 'flex';
+      document.getElementById('appShell').style.display = 'none';
+      window.__currentUser = null;
+    }
+  });
+</script>
+
+<style>
+/* ── RESET & BASE ────────────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+:root {
+  --bg:        #0a0c10;
+  --surface:   #111318;
+  --surface2:  #181c24;
+  --surface3:  #1e2330;
+  --border:    rgba(255,255,255,0.07);
+  --accent:    #e8ff47;
+  --accent2:   #47c8ff;
+  --accent3:   #ff6b47;
+  --text:      #f0f2f7;
+  --muted:     #6b7280;
+  --success:   #34d399;
+  --warning:   #fbbf24;
+  --danger:    #f87171;
+  --font-head: 'Syne', sans-serif;
+  --font-body: 'DM Sans', sans-serif;
+  --radius:    12px;
+  --sidebar-w: 240px;
+}
+
+html, body { height: 100%; overflow: hidden; }
+body { font-family: var(--font-body); background: var(--bg); color: var(--text); font-size: 14px; }
+
+/* ── LOGIN SCREEN ────────────────────────────────────────────────── */
+#loginScreen {
+  display: flex; align-items: center; justify-content: center;
+  min-height: 100vh; background: var(--bg);
+  background-image: radial-gradient(ellipse 60% 50% at 50% 0%, rgba(232,255,71,0.08) 0%, transparent 70%);
+}
+.login-box {
+  width: 380px; padding: 48px 40px; background: var(--surface);
+  border: 1px solid var(--border); border-radius: 20px;
+  box-shadow: 0 40px 80px rgba(0,0,0,0.6);
+}
+.login-logo { font-family: var(--font-head); font-size: 22px; font-weight: 800; color: var(--accent); letter-spacing: -0.5px; margin-bottom: 8px; }
+.login-sub { color: var(--muted); font-size: 13px; margin-bottom: 36px; }
+.field { margin-bottom: 16px; }
+.field label { display: block; font-size: 12px; font-weight: 500; color: var(--muted); text-transform: uppercase; letter-spacing: 0.8px; margin-bottom: 8px; }
+.field input {
+  width: 100%; padding: 12px 16px; background: var(--surface2);
+  border: 1px solid var(--border); border-radius: 8px; color: var(--text);
+  font-family: var(--font-body); font-size: 14px; outline: none; transition: border 0.2s;
+}
+.field input:focus { border-color: var(--accent); }
+.btn-primary {
+  width: 100%; padding: 13px; background: var(--accent); color: #0a0c10;
+  border: none; border-radius: 8px; font-family: var(--font-head); font-size: 14px;
+  font-weight: 700; cursor: pointer; margin-top: 8px; transition: opacity 0.2s;
+}
+.btn-primary:hover { opacity: 0.88; }
+.login-error { color: var(--danger); font-size: 12px; margin-top: 10px; min-height: 18px; }
+
+/* ── APP SHELL ───────────────────────────────────────────────────── */
+#appShell { display: none; height: 100vh; flex-direction: row; }
+
+/* ── SIDEBAR ─────────────────────────────────────────────────────── */
+.sidebar {
+  width: var(--sidebar-w); background: var(--surface); border-right: 1px solid var(--border);
+  display: flex; flex-direction: column; flex-shrink: 0; padding: 24px 0; overflow-y: auto;
+}
+.sidebar-brand { padding: 0 20px 24px; border-bottom: 1px solid var(--border); margin-bottom: 16px; }
+.brand-name { font-family: var(--font-head); font-size: 18px; font-weight: 800; color: var(--accent); letter-spacing: -0.3px; }
+.brand-tag { font-size: 11px; color: var(--muted); margin-top: 2px; }
+.nav-section-label { font-size: 10px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 1px; padding: 16px 20px 6px; }
+.nav-item {
+  display: flex; align-items: center; gap: 10px; padding: 10px 20px;
+  color: var(--muted); cursor: pointer; border-left: 3px solid transparent;
+  font-size: 13px; font-weight: 500; transition: all 0.15s; text-decoration: none;
+}
+.nav-item svg { width: 16px; height: 16px; flex-shrink: 0; }
+.nav-item:hover { color: var(--text); background: var(--surface2); }
+.nav-item.active { color: var(--accent); border-left-color: var(--accent); background: rgba(232,255,71,0.05); }
+.sidebar-footer { margin-top: auto; padding: 16px 20px; border-top: 1px solid var(--border); }
+.user-row { display: flex; align-items: center; gap: 10px; }
+.user-avatar { width: 30px; height: 30px; background: var(--accent); border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 700; color: #0a0c10; }
+.user-email { font-size: 12px; color: var(--muted); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.btn-signout { background: none; border: 1px solid var(--border); border-radius: 6px; color: var(--muted); padding: 5px 10px; font-size: 11px; cursor: pointer; transition: all 0.15s; }
+.btn-signout:hover { color: var(--danger); border-color: var(--danger); }
+
+/* ── MAIN CONTENT ────────────────────────────────────────────────── */
+.main { flex: 1; overflow-y: auto; display: flex; flex-direction: column; background: var(--bg); }
+.topbar { padding: 20px 28px; border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; background: var(--surface); position: sticky; top: 0; z-index: 10; }
+.page-title { font-family: var(--font-head); font-size: 20px; font-weight: 700; }
+.page-sub { font-size: 12px; color: var(--muted); margin-top: 2px; }
+.topbar-actions { display: flex; gap: 10px; }
+.content { padding: 28px; flex: 1; }
+
+/* ── PANELS ──────────────────────────────────────────────────────── */
+.panel { display: none; animation: fadeUp 0.25s ease; }
+.panel.active { display: block; }
+@keyframes fadeUp { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+
+/* ── STAT CARDS ──────────────────────────────────────────────────── */
+.stat-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 16px; margin-bottom: 28px; }
+.stat-card {
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 20px; position: relative; overflow: hidden;
+}
+.stat-card::before { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 2px; }
+.stat-card.green::before { background: var(--success); }
+.stat-card.yellow::before { background: var(--accent); }
+.stat-card.blue::before { background: var(--accent2); }
+.stat-card.red::before { background: var(--danger); }
+.stat-card.orange::before { background: var(--accent3); }
+.stat-label { font-size: 11px; font-weight: 500; color: var(--muted); text-transform: uppercase; letter-spacing: 0.8px; margin-bottom: 10px; }
+.stat-value { font-family: var(--font-head); font-size: 28px; font-weight: 800; line-height: 1; }
+.stat-sub { font-size: 11px; color: var(--muted); margin-top: 6px; }
+
+/* ── CARDS / SECTIONS ────────────────────────────────────────────── */
+.card {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 24px; margin-bottom: 20px;
+}
+.card-title { font-family: var(--font-head); font-size: 15px; font-weight: 700; margin-bottom: 20px; display: flex; align-items: center; gap: 8px; }
+.card-title .badge { font-family: var(--font-body); font-size: 11px; font-weight: 500; padding: 3px 8px; border-radius: 20px; }
+.badge-green { background: rgba(52,211,153,0.12); color: var(--success); }
+.badge-blue  { background: rgba(71,200,255,0.12); color: var(--accent2); }
+.badge-yellow{ background: rgba(232,255,71,0.12);  color: var(--accent); }
+.badge-red   { background: rgba(248,113,113,0.12); color: var(--danger); }
+
+/* ── FORMS ───────────────────────────────────────────────────────── */
+.form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.form-grid.cols3 { grid-template-columns: 1fr 1fr 1fr; }
+.form-group { display: flex; flex-direction: column; gap: 7px; }
+.form-group.full { grid-column: 1 / -1; }
+.form-label { font-size: 11px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.8px; }
+.form-input, .form-select, .form-textarea {
+  padding: 10px 14px; background: var(--surface2); border: 1px solid var(--border);
+  border-radius: 8px; color: var(--text); font-family: var(--font-body); font-size: 14px;
+  outline: none; transition: border 0.2s; width: 100%;
+}
+.form-input:focus, .form-select:focus, .form-textarea:focus { border-color: var(--accent); }
+.form-select option { background: var(--surface2); }
+.form-textarea { min-height: 100px; resize: vertical; }
+.char-count { font-size: 11px; color: var(--muted); text-align: right; }
+.form-hint { font-size: 11px; color: var(--muted); }
+
+/* ── BUTTONS ─────────────────────────────────────────────────────── */
+.btn { padding: 10px 18px; border-radius: 8px; font-family: var(--font-body); font-size: 13px; font-weight: 500; cursor: pointer; border: none; transition: all 0.15s; display: inline-flex; align-items: center; gap: 7px; }
+.btn-accent  { background: var(--accent); color: #0a0c10; font-weight: 700; }
+.btn-accent:hover { opacity: 0.85; }
+.btn-outline { background: transparent; color: var(--text); border: 1px solid var(--border); }
+.btn-outline:hover { border-color: var(--accent); color: var(--accent); }
+.btn-danger  { background: rgba(248,113,113,0.12); color: var(--danger); border: 1px solid rgba(248,113,113,0.2); }
+.btn-danger:hover { background: rgba(248,113,113,0.2); }
+.btn-sm { padding: 6px 12px; font-size: 12px; }
+.btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.btn-row { display: flex; gap: 10px; margin-top: 20px; align-items: center; flex-wrap: wrap; }
+
+/* ── TARGETING FILTERS ───────────────────────────────────────────── */
+.filter-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 12px; margin-bottom: 16px; }
+.filter-tag-group { display: flex; flex-wrap: wrap; gap: 8px; }
+.filter-tag {
+  padding: 6px 12px; border-radius: 20px; border: 1px solid var(--border);
+  font-size: 12px; cursor: pointer; transition: all 0.15s; color: var(--muted); background: var(--surface2);
+}
+.filter-tag.selected { border-color: var(--accent); color: var(--accent); background: rgba(232,255,71,0.06); }
+
+/* ── TABLE ───────────────────────────────────────────────────────── */
+.table-wrap { overflow-x: auto; border-radius: var(--radius); }
+table { width: 100%; border-collapse: collapse; }
+th { font-size: 11px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.8px; padding: 10px 14px; border-bottom: 1px solid var(--border); text-align: left; white-space: nowrap; }
+td { padding: 12px 14px; border-bottom: 1px solid var(--border); font-size: 13px; }
+tr:last-child td { border-bottom: none; }
+tr:hover td { background: rgba(255,255,255,0.02); }
+.status-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 6px; }
+.dot-green  { background: var(--success); }
+.dot-yellow { background: var(--warning); }
+.dot-red    { background: var(--danger); }
+.dot-blue   { background: var(--accent2); }
+
+/* ── PROGRESS BAR ────────────────────────────────────────────────── */
+.progress-wrap { height: 6px; background: var(--surface2); border-radius: 3px; overflow: hidden; }
+.progress-bar  { height: 100%; border-radius: 3px; transition: width 0.4s ease; }
+.bar-green  { background: var(--success); }
+.bar-yellow { background: var(--accent); }
+.bar-blue   { background: var(--accent2); }
+
+/* ── PREVIEW BOX ─────────────────────────────────────────────────── */
+.preview-box {
+  background: var(--surface2); border: 1px solid var(--border); border-radius: 10px;
+  padding: 16px; min-height: 80px; font-size: 14px; line-height: 1.7;
+  color: var(--text); white-space: pre-wrap; margin-top: 14px;
+}
+.preview-label { font-size: 11px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.8px; margin-bottom: 8px; }
+
+/* ── LIVE LOG ────────────────────────────────────────────────────── */
+.log-stream {
+  background: #070910; border: 1px solid var(--border); border-radius: 10px;
+  padding: 16px; height: 260px; overflow-y: auto; font-family: 'Courier New', monospace;
+  font-size: 12px; line-height: 1.8;
+}
+.log-line { padding: 1px 0; }
+.log-line.ok   { color: var(--success); }
+.log-line.warn { color: var(--warning); }
+.log-line.err  { color: var(--danger); }
+.log-line.info { color: var(--accent2); }
+.log-line.muted { color: var(--muted); }
+
+/* ── TABS ────────────────────────────────────────────────────────── */
+.tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--border); margin-bottom: 24px; }
+.tab { padding: 10px 16px; cursor: pointer; font-size: 13px; color: var(--muted); border-bottom: 2px solid transparent; margin-bottom: -1px; transition: all 0.15s; }
+.tab:hover { color: var(--text); }
+.tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+
+/* ── RECIPIENT ESTIMATE ──────────────────────────────────────────── */
+.estimate-chip {
+  display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px;
+  background: rgba(71,200,255,0.08); border: 1px solid rgba(71,200,255,0.2);
+  border-radius: 20px; font-size: 13px; color: var(--accent2);
+}
+
+/* ── TOAST ───────────────────────────────────────────────────────── */
+#toast {
+  position: fixed; bottom: 28px; right: 28px; padding: 13px 18px;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+  font-size: 13px; box-shadow: 0 8px 30px rgba(0,0,0,0.5); z-index: 9999;
+  transform: translateY(80px); opacity: 0; transition: all 0.25s; pointer-events: none;
+}
+#toast.show { transform: translateY(0); opacity: 1; }
+#toast.ok   { border-color: var(--success); color: var(--success); }
+#toast.err  { border-color: var(--danger);  color: var(--danger); }
+
+/* ── SPINNER ────────────────────────────────────────────────────── */
+.spinner { width: 16px; height: 16px; border: 2px solid rgba(255,255,255,0.2); border-top-color: var(--accent); border-radius: 50%; animation: spin 0.7s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* ── EMPTY STATE ─────────────────────────────────────────────────── */
+.empty { text-align: center; padding: 60px 20px; color: var(--muted); }
+.empty .icon { font-size: 36px; margin-bottom: 12px; }
+.empty p { font-size: 13px; }
+
+/* ── SCROLLBAR ───────────────────────────────────────────────────── */
+::-webkit-scrollbar { width: 5px; height: 5px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--surface3); border-radius: 3px; }
+
+/* ── MODAL ───────────────────────────────────────────────────────── */
+.modal-overlay {
+  display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.7);
+  z-index: 1000; align-items: center; justify-content: center;
+}
+.modal-overlay.open { display: flex; }
+.modal-box {
+  background: var(--surface); border: 1px solid var(--border); border-radius: 16px;
+  padding: 32px; width: 520px; max-width: 95vw; max-height: 90vh; overflow-y: auto;
+}
+.modal-title { font-family: var(--font-head); font-size: 18px; font-weight: 700; margin-bottom: 20px; }
+.modal-close { float: right; background: none; border: none; color: var(--muted); font-size: 20px; cursor: pointer; margin-top: -4px; }
+
+/* ── RESPONSIVE ──────────────────────────────────────────────────── */
+@media (max-width: 900px) {
+  .sidebar { width: 60px; }
+  .brand-name, .brand-tag, .nav-section-label, .nav-item span, .user-email, .btn-signout { display: none; }
+  .nav-item { justify-content: center; padding: 12px; }
+  .sidebar-footer { padding: 12px; }
+  .user-row { justify-content: center; }
+  .form-grid, .form-grid.cols3 { grid-template-columns: 1fr; }
+}
+</style>
+</head>
+<body>
+
+<!-- ── LOGIN SCREEN ──────────────────────────────────────────────── -->
+<div id="loginScreen">
+  <div class="login-box">
+    <div class="login-logo">OutreachOS</div>
+    <div class="login-sub">Political & Corporate Communication Platform</div>
+    <div class="field">
+      <label>Email</label>
+      <input type="email" id="loginEmail" placeholder="admin@yourplatform.com" autocomplete="email">
+    </div>
+    <div class="field">
+      <label>Password</label>
+      <input type="password" id="loginPassword" placeholder="••••••••" autocomplete="current-password">
+    </div>
+    <button class="btn-primary" id="loginBtn" onclick="doLogin()">Sign In</button>
+    <div class="login-error" id="loginError"></div>
+  </div>
+</div>
+
+<!-- ── APP SHELL ─────────────────────────────────────────────────── -->
+<div id="appShell">
+  <!-- SIDEBAR -->
+  <aside class="sidebar">
+    <div class="sidebar-brand">
+      <div class="brand-name">OutreachOS</div>
+      <div class="brand-tag">Command Center</div>
+    </div>
+
+    <div class="nav-section-label">Overview</div>
+    <div class="nav-item active" onclick="showPanel('overview')">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>
+      <span>Dashboard</span>
+    </div>
+
+    <div class="nav-section-label">Outreach</div>
+    <div class="nav-item" onclick="showPanel('whatsapp')">
+      <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12c0 1.85.5 3.58 1.38 5.06L2 22l4.94-1.38A9.96 9.96 0 0012 22c5.52 0 10-4.48 10-10S17.52 2 12 2zm4.84 13.6c-.2.56-1.17 1.07-1.6 1.13-.43.06-.43.3-2.72-.6-2.74-1.08-4.5-3.85-4.64-4.03-.13-.18-1.1-1.46-1.1-2.79s.7-1.98.95-2.25c.24-.27.53-.34.7-.34h.51c.16 0 .38-.06.6.45l.85 2.1c.07.17.12.37.01.56l-.31.45-.47.53c-.15.17-.31.35-.13.67.18.32.79 1.3 1.69 2.1 1.16 1.04 2.14 1.37 2.46 1.52.32.15.5.12.68-.07l.48-.55c.18-.2.35-.14.6-.05l1.82.86c.25.12.42.17.49.27.07.1.07.57-.13 1.13z"/></svg>
+      <span>WhatsApp</span>
+    </div>
+    <div class="nav-item" onclick="showPanel('robo')">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 16.92v3a2 2 0 01-2.18 2 19.79 19.79 0 01-8.63-3.07 19.5 19.5 0 01-6-6 19.79 19.79 0 01-3.07-8.67A2 2 0 014.11 2h3a2 2 0 012 1.72 12.84 12.84 0 00.7 2.81 2 2 0 01-.45 2.11L8.09 9.91a16 16 0 006 6l1.27-1.27a2 2 0 012.11-.45 12.84 12.84 0 002.81.7A2 2 0 0122 16.92z"/></svg>
+      <span>Robo Calls</span>
+    </div>
+
+    <div class="nav-section-label">Data</div>
+    <div class="nav-item" onclick="showPanel('recipients')">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87"/><path d="M16 3.13a4 4 0 010 7.75"/></svg>
+      <span>Recipients</span>
+    </div>
+    <div class="nav-item" onclick="showPanel('campaigns')">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+      <span>Campaigns</span>
+    </div>
+
+    <div class="nav-section-label">Compliance</div>
+    <div class="nav-item" onclick="showPanel('logs')">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
+      <span>Logs &amp; Compliance</span>
+    </div>
+    <div class="nav-item" onclick="showPanel('senders')">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 3H8a2 2 0 00-2 2v2h12V5a2 2 0 00-2-2z"/></svg>
+      <span>Senders</span>
+    </div>
+
+    <div class="sidebar-footer">
+      <div class="user-row">
+        <div class="user-avatar" id="userAvatarLetter">A</div>
+        <div class="user-email" id="userEmail"></div>
+        <button class="btn-signout" onclick="doSignout()">Out</button>
+      </div>
+    </div>
+  </aside>
+
+  <!-- MAIN -->
+  <div class="main">
+    <div class="topbar">
+      <div>
+        <div class="page-title" id="pageTitle">Dashboard</div>
+        <div class="page-sub" id="pageSub">Real-time overview</div>
+      </div>
+      <div class="topbar-actions" id="topbarActions"></div>
+    </div>
+
+    <div class="content">
+
+      <!-- ── OVERVIEW ───────────────────────────────────────────── -->
+      <div id="panel-overview" class="panel active">
+        <div class="stat-grid" id="overviewStats">
+          <div class="stat-card yellow"><div class="stat-label">Total Recipients</div><div class="stat-value" id="stat-recipients">—</div><div class="stat-sub">in database</div></div>
+          <div class="stat-card green"><div class="stat-label">Messages Sent</div><div class="stat-value" id="stat-sent">—</div><div class="stat-sub">all time</div></div>
+          <div class="stat-card blue"><div class="stat-label">Calls Placed</div><div class="stat-value" id="stat-calls">—</div><div class="stat-sub">all time</div></div>
+          <div class="stat-card red"><div class="stat-label">Opt-outs</div><div class="stat-value" id="stat-optouts">—</div><div class="stat-sub">removed from lists</div></div>
+          <div class="stat-card orange"><div class="stat-label">Active Campaigns</div><div class="stat-value" id="stat-campaigns">—</div><div class="stat-sub">running now</div></div>
+        </div>
+
+        <div style="display:grid; grid-template-columns: 1fr 1fr; gap: 20px;">
+          <div class="card">
+            <div class="card-title">Recent Campaigns</div>
+            <div id="recentCampaigns"><div class="empty"><div class="icon">📋</div><p>No campaigns yet</p></div></div>
+          </div>
+          <div class="card">
+            <div class="card-title">Live Activity <span class="badge badge-green" id="liveIndicator">● Live</span></div>
+            <div class="log-stream" id="activityLog">
+              <div class="log-line muted">— Waiting for activity —</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ── WHATSAPP ───────────────────────────────────────────── -->
+      <div id="panel-whatsapp" class="panel">
+        <div class="tabs">
+          <div class="tab active" onclick="switchTab(this,'wa-compose')">Compose Campaign</div>
+          <div class="tab" onclick="switchTab(this,'wa-history')">History</div>
+        </div>
+
+        <div id="wa-compose">
+          <div class="card">
+            <div class="card-title">New WhatsApp Campaign</div>
+            <div class="form-grid">
+              <div class="form-group">
+                <label class="form-label">Campaign Name</label>
+                <input class="form-input" id="waCampaignName" placeholder="e.g. Governorship Push — Uyo">
+              </div>
+              <div class="form-group">
+                <label class="form-label">Message Type</label>
+                <select class="form-select" id="waMsgType">
+                  <option value="text">Text Only</option>
+                  <option value="image">Image + Caption</option>
+                  <option value="video">Video + Caption</option>
+                  <option value="audio">Voice Note</option>
+                  <option value="document">Document / Flyer (PDF)</option>
+                </select>
+              </div>
+            </div>
+
+            <div style="margin-top: 20px;">
+              <div class="card-title" style="font-size:13px; margin-bottom:12px;">🎯 Targeting</div>
+              <div class="form-grid cols3">
+                <div class="form-group">
+                  <label class="form-label">State</label>
+                  <select class="form-select" id="waState" onchange="updateLGAs('wa')">
+                    <option value="">All States</option>
+                  </select>
+                </div>
+                <div class="form-group">
+                  <label class="form-label">LGA</label>
+                  <select class="form-select" id="waLGA" onchange="updateWards('wa')">
+                    <option value="">All LGAs</option>
+                  </select>
+                </div>
+                <div class="form-group">
+                  <label class="form-label">Ward</label>
+                  <select class="form-select" id="waWard">
+                    <option value="">All Wards</option>
+                  </select>
+                </div>
+                <div class="form-group">
+                  <label class="form-label">Language Group</label>
+                  <select class="form-select" id="waLang">
+                    <option value="">All Languages</option>
+                    <option value="Yoruba">Yoruba</option>
+                    <option value="Igbo">Igbo</option>
+                    <option value="Hausa">Hausa</option>
+                    <option value="Efik">Efik</option>
+                    <option value="Ibibio">Ibibio</option>
+                    <option value="Ijaw">Ijaw</option>
+                    <option value="Tiv">Tiv</option>
+                    <option value="English">English</option>
+                  </select>
+                </div>
+                <div class="form-group">
+                  <label class="form-label">Interest Group</label>
+                  <select class="form-select" id="waGroup">
+                    <option value="">All Groups</option>
+                    <option value="Youth">Youth</option>
+                    <option value="Women">Women</option>
+                    <option value="Trader">Traders / Market</option>
+                    <option value="Farmer">Farmers</option>
+                    <option value="Professional">Professionals</option>
+                    <option value="Religious">Religious Leaders</option>
+                    <option value="Traditional">Traditional Rulers</option>
+                  </select>
+                </div>
+                <div class="form-group" style="justify-content: flex-end; padding-top: 20px;">
+                  <button class="btn btn-outline btn-sm" onclick="estimateReach('wa')">Estimate Reach</button>
+                  <div class="estimate-chip" id="waEstimate" style="display:none; margin-top:8px;"><span id="waEstimateNum">0</span> recipients</div>
+                </div>
+              </div>
+            </div>
+
+            <div style="margin-top: 20px;">
+              <div class="form-group full">
+                <label class="form-label">Message Template</label>
+                <textarea class="form-textarea" id="waMessage" placeholder="Use {name} to personalize. Example: Hello {name}, Governor Udom is calling on you..." oninput="updateCharCount()"></textarea>
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-top:6px;">
+                  <div class="form-hint">Variables: <code>{name}</code> <code>{lga}</code> <code>{ward}</code></div>
+                  <div class="char-count" id="charCount">0 chars</div>
+                </div>
+              </div>
+            </div>
+
+            <div id="mediaUrlGroup" style="display:none; margin-top:12px;">
+              <div class="form-group">
+                <label class="form-label">Media URL</label>
+                <input class="form-input" id="waMediaUrl" placeholder="https://your-cdn.com/file.jpg">
+                <div class="form-hint" style="margin-top:6px;">Must be a publicly accessible URL</div>
+              </div>
+            </div>
+
+            <div class="preview-label" style="margin-top:20px;">Message Preview</div>
+            <div class="preview-box" id="waPreviewBox">Your message will preview here...</div>
+
+            <div class="btn-row">
+              <button class="btn btn-outline" onclick="previewWA()">Preview</button>
+              <button class="btn btn-accent" onclick="submitWACampaign()" id="waSendBtn">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+                Launch Campaign
+              </button>
+              <div id="waSendStatus" style="font-size:12px; color: var(--muted);"></div>
+            </div>
+          </div>
+        </div>
+
+        <div id="wa-history" style="display:none;">
+          <div class="card">
+            <div class="card-title">Campaign History</div>
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>Campaign</th><th>Targets</th><th>Sent</th><th>Status</th><th>Created</th></tr></thead>
+                <tbody id="waCampaignRows"><tr><td colspan="5"><div class="empty"><p>No campaigns yet</p></div></td></tr></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ── ROBO CALLS ─────────────────────────────────────────── -->
+      <div id="panel-robo" class="panel">
+        <div class="tabs">
+          <div class="tab active" onclick="switchTab(this,'robo-compose')">New Voice Campaign</div>
+          <div class="tab" onclick="switchTab(this,'robo-history')">History</div>
+        </div>
+
+        <div id="robo-compose">
+          <div class="card">
+            <div class="card-title">Voice Broadcast Campaign</div>
+            <div class="form-grid">
+              <div class="form-group">
+                <label class="form-label">Campaign Name</label>
+                <input class="form-input" id="roboCampaignName" placeholder="e.g. Governor Voice — Eket LGA">
+              </div>
+              <div class="form-group">
+                <label class="form-label">Caller ID (Sender Line)</label>
+                <input class="form-input" id="roboCallerId" placeholder="+234XXXXXXXXXX">
+              </div>
+            </div>
+
+            <div style="margin-top:20px;">
+              <div class="card-title" style="font-size:13px; margin-bottom:12px;">🎯 Targeting</div>
+              <div class="form-grid cols3">
+                <div class="form-group">
+                  <label class="form-label">State</label>
+                  <select class="form-select" id="roboState" onchange="updateLGAs('robo')">
+                    <option value="">All States</option>
+                  </select>
+                </div>
+                <div class="form-group">
+                  <label class="form-label">LGA</label>
+                  <select class="form-select" id="roboLGA">
+                    <option value="">All LGAs</option>
+                  </select>
+                </div>
+                <div class="form-group">
+                  <label class="form-label">Ward</label>
+                  <select class="form-select" id="roboWard">
+                    <option value="">All Wards</option>
+                  </select>
+                </div>
+                <div class="form-group">
+                  <label class="form-label">Language Group</label>
+                  <select class="form-select" id="roboLang">
+                    <option value="">All Languages</option>
+                    <option value="Yoruba">Yoruba</option>
+                    <option value="Igbo">Igbo</option>
+                    <option value="Hausa">Hausa</option>
+                    <option value="Efik">Efik</option>
+                    <option value="Ibibio">Ibibio</option>
+                  </select>
+                </div>
+                <div class="form-group">
+                  <label class="form-label">Throttle Speed</label>
+                  <select class="form-select" id="roboThrottle">
+                    <option value="1000">1 call / second</option>
+                    <option value="2000">1 call / 2 seconds</option>
+                    <option value="5000">1 call / 5 seconds (safe)</option>
+                  </select>
+                </div>
+                <div class="form-group" style="justify-content: flex-end; padding-top:20px;">
+                  <button class="btn btn-outline btn-sm" onclick="estimateReach('robo')">Estimate Reach</button>
+                  <div class="estimate-chip" id="roboEstimate" style="display:none; margin-top:8px;"><span id="roboEstimateNum">0</span> recipients</div>
+                </div>
+              </div>
+            </div>
+
+            <div style="margin-top:20px;">
+              <div class="form-group">
+                <label class="form-label">Voice File URL (MP3/WAV)</label>
+                <input class="form-input" id="roboVoiceUrl" placeholder="https://your-cdn.com/campaign-audio.mp3">
+                <div class="form-hint" style="margin-top:6px;">⚠️ Recording must end with: <em>"To stop receiving these calls, press 2."</em></div>
+              </div>
+            </div>
+
+            <div class="preview-box" id="roboPreviewBox" style="margin-top:16px; font-size:13px; color: var(--muted);">Preview will appear here after you fill in the details.</div>
+
+            <div class="btn-row">
+              <button class="btn btn-outline" onclick="previewRobo()">Preview Campaign</button>
+              <button class="btn btn-accent" onclick="submitRoboCampaign()">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M22 16.92v3a2 2 0 01-2.18 2 19.79 19.79 0 01-8.63-3.07A19.5 19.5 0 015.11 15a19.79 19.79 0 01-3.07-8.67A2 2 0 014.11 2h3a2 2 0 012 1.72c.127.96.361 1.903.7 2.81a2 2 0 01-.45 2.11L8.09 9.91a16 16 0 006 6l1.27-1.27a2 2 0 012.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0122 16.92z"/></svg>
+                Launch Voice Campaign
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <div id="robo-history" style="display:none;">
+          <div class="card">
+            <div class="card-title">Voice Campaign History</div>
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>Campaign</th><th>Targets</th><th>Calls Placed</th><th>Opt-outs</th><th>Status</th><th>Date</th></tr></thead>
+                <tbody id="roboCampaignRows"><tr><td colspan="6"><div class="empty"><p>No voice campaigns yet</p></div></td></tr></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ── RECIPIENTS ─────────────────────────────────────────── -->
+      <div id="panel-recipients" class="panel">
+        <div class="card">
+          <div class="card-title">
+            Recipient Database
+            <button class="btn btn-accent btn-sm" style="margin-left:auto;" onclick="document.getElementById('importModal').classList.add('open')">+ Import CSV</button>
+          </div>
+
+          <div style="display:flex; gap:10px; margin-bottom:16px; flex-wrap:wrap;">
+            <input class="form-input" style="max-width:260px;" id="recipientSearch" placeholder="Search phone, name…" oninput="searchRecipients()">
+            <select class="form-select" style="max-width:160px;" id="filterState" onchange="filterRecipients()">
+              <option value="">All States</option>
+            </select>
+            <select class="form-select" style="max-width:160px;" id="filterLGA" onchange="filterRecipients()">
+              <option value="">All LGAs</option>
+            </select>
+          </div>
+
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Name</th><th>Phone</th><th>State</th><th>LGA</th><th>Ward</th><th>Language</th><th>Group</th><th>Status</th></tr></thead>
+              <tbody id="recipientRows">
+                <tr><td colspan="8"><div class="empty"><div class="icon">👥</div><p>Import recipients to get started</p></div></td></tr>
+              </tbody>
+            </table>
+          </div>
+          <div id="recipientPagination" style="display:flex; gap:8px; margin-top:14px; align-items:center; font-size:12px; color:var(--muted);"></div>
+        </div>
+      </div>
+
+      <!-- ── CAMPAIGNS ──────────────────────────────────────────── -->
+      <div id="panel-campaigns" class="panel">
+        <div class="card">
+          <div class="card-title">All Campaigns</div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Name</th><th>Type</th><th>Target</th><th>Progress</th><th>Status</th><th>Date</th><th>Actions</th></tr></thead>
+              <tbody id="allCampaignRows">
+                <tr><td colspan="7"><div class="empty"><div class="icon">📋</div><p>No campaigns yet</p></div></td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- ── LOGS ───────────────────────────────────────────────── -->
+      <div id="panel-logs" class="panel">
+        <div class="stat-grid">
+          <div class="stat-card green"><div class="stat-label">Total Sends</div><div class="stat-value" id="log-stat-sends">—</div></div>
+          <div class="stat-card blue"><div class="stat-label">Voice Logs</div><div class="stat-value" id="log-stat-voice">—</div></div>
+          <div class="stat-card red"><div class="stat-label">Opt-outs</div><div class="stat-value" id="log-stat-optouts">—</div></div>
+          <div class="stat-card yellow"><div class="stat-label">Replies</div><div class="stat-value" id="log-stat-replies">—</div></div>
+        </div>
+
+        <div style="display:grid; grid-template-columns:1fr 1fr; gap:20px;">
+          <div class="card">
+            <div class="card-title">Recent Opt-outs</div>
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>Phone</th><th>Method</th><th>Time</th></tr></thead>
+                <tbody id="optoutRows"><tr><td colspan="3"><div class="empty"><p>No opt-outs recorded</p></div></td></tr></tbody>
+              </table>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card-title">Recent Replies</div>
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>Phone</th><th>Message</th><th>Time</th></tr></thead>
+                <tbody id="replyRows"><tr><td colspan="3"><div class="empty"><p>No replies yet</p></div></td></tr></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-title">Send Logs</div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Campaign</th><th>Phone</th><th>Sender</th><th>Status</th><th>Time</th></tr></thead>
+              <tbody id="sendLogRows"><tr><td colspan="5"><div class="empty"><p>No logs yet</p></div></td></tr></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- ── SENDERS ────────────────────────────────────────────── -->
+      <div id="panel-senders" class="panel">
+        <div class="card">
+          <div class="card-title">
+            Sender Lines
+            <button class="btn btn-accent btn-sm" style="margin-left:auto;" onclick="document.getElementById('addSenderModal').classList.add('open')">+ Add Sender</button>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Sender ID</th><th>Daily Limit</th><th>Sent Today</th><th>Status</th><th>Actions</th></tr></thead>
+              <tbody id="senderRows"><tr><td colspan="5"><div class="empty"><p>No senders configured</p></div></td></tr></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+    </div><!-- /content -->
+  </div><!-- /main -->
+</div><!-- /appShell -->
+
+<!-- ── MODALS ────────────────────────────────────────────────────── -->
+
+<!-- Import CSV Modal -->
+<div class="modal-overlay" id="importModal">
+  <div class="modal-box">
+    <button class="modal-close" onclick="document.getElementById('importModal').classList.remove('open')">×</button>
+    <div class="modal-title">Import Recipients (CSV)</div>
+    <p style="font-size:13px; color:var(--muted); margin-bottom:16px;">CSV must have columns: <code>phone, state, lga, ward, name, language, group</code></p>
+    <div class="form-group">
+      <label class="form-label">Upload CSV File</label>
+      <input type="file" accept=".csv" id="csvFile" class="form-input" style="padding:8px;">
+    </div>
+    <div class="log-stream" id="importLog" style="height:160px; margin-top:16px; display:none;"></div>
+    <div class="btn-row">
+      <button class="btn btn-accent" onclick="importCSV()" id="importBtn">Import</button>
+      <div id="importStatus" style="font-size:12px; color:var(--muted);"></div>
+    </div>
+  </div>
+</div>
+
+<!-- Add Sender Modal -->
+<div class="modal-overlay" id="addSenderModal">
+  <div class="modal-box">
+    <button class="modal-close" onclick="document.getElementById('addSenderModal').classList.remove('open')">×</button>
+    <div class="modal-title">Add Sender Line</div>
+    <div class="form-group" style="margin-bottom:14px;">
+      <label class="form-label">Sender ID / Label</label>
+      <input class="form-input" id="newSenderId" placeholder="e.g. sender_line_01">
+    </div>
+    <div class="form-group" style="margin-bottom:14px;">
+      <label class="form-label">Daily Send Limit</label>
+      <input class="form-input" type="number" id="newSenderLimit" placeholder="300" value="300">
+    </div>
+    <div class="btn-row">
+      <button class="btn btn-accent" onclick="addSender()">Add Sender</button>
+    </div>
+  </div>
+</div>
+
+<!-- Toast -->
+<div id="toast"></div>
+
+<!-- ── SCRIPTS ───────────────────────────────────────────────────── -->
+<script>
+// ── NAV & PANEL SWITCHING ──────────────────────────────────────────
+const PAGE_META = {
+  overview:   { title: 'Dashboard',          sub: 'Real-time overview' },
+  whatsapp:   { title: 'WhatsApp Outreach',  sub: 'Compose and manage campaigns' },
+  robo:       { title: 'Robo Calls',         sub: 'Voice broadcast campaigns' },
+  recipients: { title: 'Recipients',         sub: 'Manage your contact database' },
+  campaigns:  { title: 'All Campaigns',      sub: 'Track and manage all outreach' },
+  logs:       { title: 'Compliance Logs',    sub: 'Opt-outs, replies, and audit trail' },
+  senders:    { title: 'Sender Lines',       sub: 'Manage WhatsApp sender accounts' },
+};
+
+function showPanel(id) {
+  document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+  document.getElementById('panel-' + id).classList.add('active');
+  event.currentTarget.classList.add('active');
+  const meta = PAGE_META[id] || {};
+  document.getElementById('pageTitle').textContent = meta.title || '';
+  document.getElementById('pageSub').textContent = meta.sub || '';
+  if (id === 'logs') loadLogs();
+  if (id === 'senders') loadSenders();
+  if (id === 'recipients') loadRecipients();
+  if (id === 'campaigns') loadAllCampaigns();
+  if (id === 'whatsapp') loadCampaignHistory('whatsapp');
+  if (id === 'robo') loadCampaignHistory('voice');
+}
+
+function switchTab(el, targetId) {
+  const tabs = el.closest('.tabs');
+  tabs.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  el.classList.add('active');
+  const parentContent = tabs.nextElementSibling;
+  // show/hide sibling divs
+  const siblings = [];
+  let sib = tabs.nextElementSibling;
+  while (sib) { siblings.push(sib); sib = sib.nextElementSibling; }
+  siblings.forEach(s => { if (s.id) s.style.display = s.id === targetId ? 'block' : 'none'; });
+  if (targetId === 'wa-history') loadCampaignHistory('whatsapp');
+  if (targetId === 'robo-history') loadCampaignHistory('voice');
+}
+
+// ── AUTH ──────────────────────────────────────────────────────────
+async function doLogin() {
+  const email = document.getElementById('loginEmail').value.trim();
+  const pass  = document.getElementById('loginPassword').value;
+  const err   = document.getElementById('loginError');
+  const btn   = document.getElementById('loginBtn');
+  if (!email || !pass) { err.textContent = 'Please enter email and password.'; return; }
+  btn.textContent = 'Signing in…'; btn.disabled = true; err.textContent = '';
+  try {
+    const { signInWithEmailAndPassword } = window.__firebaseModules;
+    await signInWithEmailAndPassword(window.__firebaseAuth, email, pass);
+  } catch(e) {
+    err.textContent = 'Invalid credentials. Check email and password.';
+    btn.textContent = 'Sign In'; btn.disabled = false;
+  }
+}
+document.getElementById('loginPassword').addEventListener('keydown', e => { if(e.key==='Enter') doLogin(); });
+
+async function doSignout() {
+  const { signOut } = window.__firebaseModules;
+  await signOut(window.__firebaseAuth);
+}
+
+// ── INIT DASHBOARD ────────────────────────────────────────────────
+async function initDashboard() {
+  const email = window.__currentUser?.email || '';
+  document.getElementById('userEmail').textContent = email;
+  document.getElementById('userAvatarLetter').textContent = email.charAt(0).toUpperCase();
+  await loadOverviewStats();
+  populateStateDropdowns();
+  listenToActivity();
+}
+
+// ── FIRESTORE HELPERS ─────────────────────────────────────────────
+function db() { return window.__firebaseDB; }
+function m()  { return window.__firebaseModules; }
+
+async function countCollection(col, ...constraints) {
+  try {
+    const { collection, query, getCountFromServer } = m();
+    const ref = collection(db(), col);
+    const q = constraints.length ? query(ref, ...constraints) : ref;
+    const snap = await getCountFromServer(q);
+    return snap.data().count;
+  } catch(e) { return '—'; }
+}
+
+// ── OVERVIEW STATS ────────────────────────────────────────────────
+async function loadOverviewStats() {
+  const { where } = m();
+  const [rec, sent, calls, optouts, campaigns] = await Promise.all([
+    countCollection('recipients'),
+    countCollection('sends'),
+    countCollection('voiceLogs'),
+    countCollection('recipients', where('optedOut','==',true)),
+    countCollection('campaigns', where('status','in',['scheduled','running'])),
+  ]);
+  document.getElementById('stat-recipients').textContent = fmt(rec);
+  document.getElementById('stat-sent').textContent = fmt(sent);
+  document.getElementById('stat-calls').textContent = fmt(calls);
+  document.getElementById('stat-optouts').textContent = fmt(optouts);
+  document.getElementById('stat-campaigns').textContent = fmt(campaigns);
+
+  // Load recent campaigns
+  try {
+    const { collection, query, orderBy, limit, getDocs } = m();
+    const q = query(collection(db(),'campaigns'), orderBy('scheduledAt','desc'), limit(5));
+    const snap = await getDocs(q);
+    const el = document.getElementById('recentCampaigns');
+    if (snap.empty) return;
+    let html = '<table style="width:100%"><thead><tr><th>Name</th><th>Type</th><th>Status</th></tr></thead><tbody>';
+    snap.forEach(d => {
+      const c = d.data();
+      html += `<tr><td>${c.name||'—'}</td><td>${c.type||'wa'}</td><td>${statusBadge(c.status)}</td></tr>`;
+    });
+    html += '</tbody></table>';
+    el.innerHTML = html;
+  } catch(e) {}
+}
+
+function listenToActivity() {
+  const { collection, query, orderBy, limit, onSnapshot } = m();
+  const q = query(collection(db(),'sends'), orderBy('attemptAt','desc'), limit(20));
+  onSnapshot(q, snap => {
+    const log = document.getElementById('activityLog');
+    if (snap.empty) return;
+    log.innerHTML = '';
+    snap.forEach(d => {
+      const s = d.data();
+      const time = s.attemptAt?.toDate ? s.attemptAt.toDate().toLocaleTimeString() : '';
+      log.innerHTML += `<div class="log-line ok">✓ [${time}] Sent → ${s.recipientId||'—'} via ${s.senderId||'—'}</div>`;
+    });
+    log.scrollTop = 0;
+  });
+}
+
+// ── TARGETING / STATE DATA ────────────────────────────────────────
+const GEO = {
+  'Akwa Ibom': { lgas: ['Uyo','Ikot Ekpene','Eket','Oron','Abak','Ikot Abasi','Esit Eket','Uquo-Ibeno'], wards: { 'Uyo': ['Ward 1','Ward 2','Ward 3','Ward 4','Ward 5'], 'Ikot Ekpene': ['Ward 1','Ward 2','Ward 3'], 'Eket': ['Ward 1','Ward 2','Ward 3'] } },
+  'Lagos':     { lgas: ['Alimosho','Ikeja','Eti-Osa','Surulere','Kosofe','Lagos Island','Lagos Mainland','Ikorodu','Badagry','Epe'], wards: {} },
+  'Rivers':    { lgas: ['Port Harcourt','Obio-Akpor','Ikwerre','Etche','Oyigbo','Khana','Gokana','Tai'], wards: {} },
+  'Kano':      { lgas: ['Kano Municipal','Fagge','Dala','Gwale','Tarauni','Nassarawa','Ungogo','Kumbotso'], wards: {} },
+  'Abuja FCT': { lgas: ['AMAC','Bwari','Gwagwalada','Kuje','Abaji','Kwali'], wards: {} },
+  'Delta':     { lgas: ['Warri South','Oshimili South','Uvwie','Sapele','Udu','Ethiope East','Ethiope West'], wards: {} },
+  'Anambra':   { lgas: ['Awka South','Onitsha North','Onitsha South','Nnewi North','Ihiala','Ogbaru'], wards: {} },
+  'Enugu':     { lgas: ['Enugu North','Enugu South','Igbo-Eze North','Nkanu East','Udenu'], wards: {} },
+  'Oyo':       { lgas: ['Ibadan North','Ibadan South','Ibadan East','Ogbomosho North','Ilorin East'], wards: {} },
+  'Kaduna':    { lgas: ['Kaduna North','Kaduna South','Chikun','Igabi','Zaria'], wards: {} },
+};
+
+function populateStateDropdowns() {
+  const states = Object.keys(GEO).sort();
+  ['waState','roboState','filterState'].forEach(id => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    states.forEach(s => { const o = document.createElement('option'); o.value = s; o.textContent = s; el.appendChild(o); });
+  });
+}
+
+function updateLGAs(prefix) {
+  const state = document.getElementById(prefix+'State').value;
+  const lgaEl = document.getElementById(prefix+'LGA');
+  lgaEl.innerHTML = '<option value="">All LGAs</option>';
+  if (state && GEO[state]) {
+    GEO[state].lgas.forEach(l => { const o = document.createElement('option'); o.value = l; o.textContent = l; lgaEl.appendChild(o); });
+  }
+  const wardEl = document.getElementById(prefix+'Ward');
+  if (wardEl) { wardEl.innerHTML = '<option value="">All Wards</option>'; }
+}
+
+function updateWards(prefix) {
+  const state = document.getElementById(prefix+'State').value;
+  const lga   = document.getElementById(prefix+'LGA').value;
+  const wardEl = document.getElementById(prefix+'Ward');
+  if (!wardEl) return;
+  wardEl.innerHTML = '<option value="">All Wards</option>';
+  if (state && lga && GEO[state]?.wards?.[lga]) {
+    GEO[state].wards[lga].forEach(w => { const o = document.createElement('option'); o.value = w; o.textContent = w; wardEl.appendChild(o); });
+  }
+}
+
+// ── ESTIMATE REACH ────────────────────────────────────────────────
+async function estimateReach(prefix) {
+  const { collection, query, where, getCountFromServer } = m();
+  const constraints = [];
+  const state = document.getElementById(prefix+'State').value;
+  const lga   = document.getElementById(prefix+'LGA').value;
+  const ward  = document.getElementById(prefix+'Ward');
+  const lang  = document.getElementById(prefix+'Lang');
+  const group = document.getElementById(prefix+'Group');
+  if (state) constraints.push(where('state','==',state));
+  if (lga)   constraints.push(where('lga','==',lga));
+  if (ward?.value)  constraints.push(where('ward','==',ward.value));
+  if (lang?.value)  constraints.push(where('language','==',lang.value));
+  if (group?.value) constraints.push(where('group','==',group.value));
+  constraints.push(where('optedOut','==',false));
+  try {
+    const q = query(collection(db(),'recipients'), ...constraints);
+    const snap = await getCountFromServer(q);
+    const count = snap.data().count;
+    const estEl = document.getElementById(prefix+'Estimate');
+    document.getElementById(prefix+'EstimateNum').textContent = count.toLocaleString();
+    estEl.style.display = 'inline-flex';
+  } catch(e) { showToast('Error estimating reach: ' + e.message, 'err'); }
+}
+
+// ── WHATSAPP CAMPAIGN ─────────────────────────────────────────────
+document.getElementById('waMsgType').addEventListener('change', function() {
+  document.getElementById('mediaUrlGroup').style.display = this.value !== 'text' ? 'block' : 'none';
+});
+
+function updateCharCount() {
+  const len = document.getElementById('waMessage').value.length;
+  document.getElementById('charCount').textContent = len + ' chars';
+}
+
+function previewWA() {
+  const msg  = document.getElementById('waMessage').value;
+  const state = document.getElementById('waState').value || 'All States';
+  const lga  = document.getElementById('waLGA').value || 'All LGAs';
+  const preview = (msg || '(empty message)').replace(/{name}/g,'[Recipient Name]').replace(/{lga}/g,lga).replace(/{ward}/g,'[Ward]');
+  document.getElementById('waPreviewBox').textContent = `To: ${state} › ${lga}\n\n${preview}`;
+}
+
+async function submitWACampaign() {
+  const name    = document.getElementById('waCampaignName').value.trim();
+  const message = document.getElementById('waMessage').value.trim();
+  const type    = document.getElementById('waMsgType').value;
+  if (!name || !message) { showToast('Campaign name and message are required', 'err'); return; }
+  const targetQuery = {};
+  const state = document.getElementById('waState').value;
+  const lga   = document.getElementById('waLGA').value;
+  const ward  = document.getElementById('waWard').value;
+  const lang  = document.getElementById('waLang').value;
+  const group = document.getElementById('waGroup').value;
+  if (state) targetQuery.state = state;
+  if (lga)   targetQuery.lga = lga;
+  if (ward)  targetQuery.ward = ward;
+  if (lang)  targetQuery.language = lang;
+  if (group) targetQuery.group = group;
+  const mediaUrl = document.getElementById('waMediaUrl').value.trim();
+  const btn = document.getElementById('waSendBtn');
+  btn.disabled = true; btn.innerHTML = '<div class="spinner"></div> Saving…';
+  try {
+    const { collection, addDoc, serverTimestamp } = m();
+    await addDoc(collection(db(),'campaigns'), {
+      name, type: 'whatsapp', messageType: type, messageTemplate: message,
+      mediaUrl: mediaUrl || null, targetQuery, status: 'scheduled',
+      createdBy: window.__currentUser.uid, scheduledAt: serverTimestamp()
+    });
+    showToast('Campaign queued! Worker will process it shortly.', 'ok');
+    document.getElementById('waCampaignName').value = '';
+    document.getElementById('waMessage').value = '';
+    btn.disabled = false; btn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg> Launch Campaign';
+    loadOverviewStats();
+  } catch(e) {
+    showToast('Error: ' + e.message, 'err');
+    btn.disabled = false; btn.innerHTML = 'Launch Campaign';
+  }
+}
+
+// ── ROBO CALL CAMPAIGN ────────────────────────────────────────────
+function previewRobo() {
+  const name    = document.getElementById('roboCampaignName').value || '(unnamed)';
+  const state   = document.getElementById('roboState').value || 'All States';
+  const lga     = document.getElementById('roboLGA').value || 'All LGAs';
+  const url     = document.getElementById('roboVoiceUrl').value || '(no URL)';
+  const throttle = document.getElementById('roboThrottle').value;
+  document.getElementById('roboPreviewBox').textContent =
+    `Campaign: ${name}\nTarget: ${state} › ${lga}\nVoice file: ${url}\nThrottle: ${throttle}ms between calls\nOpt-out: Press 2 → auto-flagged in Firestore`;
+}
+
+async function submitRoboCampaign() {
+  const name    = document.getElementById('roboCampaignName').value.trim();
+  const voiceUrl = document.getElementById('roboVoiceUrl').value.trim();
+  const callerId = document.getElementById('roboCallerId').value.trim();
+  if (!name || !voiceUrl) { showToast('Campaign name and voice URL are required', 'err'); return; }
+  const targetQuery = {};
+  const state = document.getElementById('roboState').value;
+  const lga   = document.getElementById('roboLGA').value;
+  const lang  = document.getElementById('roboLang').value;
+  if (state) targetQuery.state = state;
+  if (lga)   targetQuery.lga = lga;
+  if (lang)  targetQuery.language = lang;
+  try {
+    const { collection, addDoc, serverTimestamp } = m();
+    await addDoc(collection(db(),'campaigns'), {
+      name, type: 'voice', voiceUrl, callerId: callerId || null,
+      throttleMs: parseInt(document.getElementById('roboThrottle').value),
+      targetQuery, status: 'scheduled',
+      createdBy: window.__currentUser.uid, scheduledAt: serverTimestamp()
+    });
+    showToast('Voice campaign queued successfully!', 'ok');
+    document.getElementById('roboCampaignName').value = '';
+    document.getElementById('roboVoiceUrl').value = '';
+    loadOverviewStats();
+  } catch(e) { showToast('Error: ' + e.message, 'err'); }
+}
+
+// ── RECIPIENTS ────────────────────────────────────────────────────
+let allRecipients = [];
+let recipientPage = 0;
+const PAGE_SIZE = 50;
+
+async function loadRecipients() {
+  const { collection, query, orderBy, limit, getDocs } = m();
+  const q = query(collection(db(),'recipients'), orderBy('name'), limit(200));
+  const snap = await getDocs(q);
+  allRecipients = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+  renderRecipients(allRecipients);
+  // Populate filter LGAs
+  const lgas = [...new Set(allRecipients.map(r => r.lga).filter(Boolean))].sort();
+  const filterLGA = document.getElementById('filterLGA');
+  filterLGA.innerHTML = '<option value="">All LGAs</option>';
+  lgas.forEach(l => { const o = document.createElement('option'); o.value = l; o.textContent = l; filterLGA.appendChild(o); });
+}
+
+function renderRecipients(list) {
+  const tbody = document.getElementById('recipientRows');
+  if (list.length === 0) { tbody.innerHTML = '<tr><td colspan="8"><div class="empty"><p>No matching recipients</p></div></td></tr>'; return; }
+  const page = list.slice(recipientPage * PAGE_SIZE, (recipientPage+1) * PAGE_SIZE);
+  tbody.innerHTML = page.map(r => `
+    <tr>
+      <td>${r.name||'—'}</td>
+      <td>${r.phone||'—'}</td>
+      <td>${r.state||'—'}</td>
+      <td>${r.lga||'—'}</td>
+      <td>${r.ward||'—'}</td>
+      <td>${r.language||'—'}</td>
+      <td>${r.group||'—'}</td>
+      <td><span class="status-dot ${r.optedOut?'dot-red':'dot-green'}"></span>${r.optedOut?'Opted out':'Active'}</td>
+    </tr>`).join('');
+  const pag = document.getElementById('recipientPagination');
+  const total = list.length;
+  const pages = Math.ceil(total / PAGE_SIZE);
+  pag.innerHTML = `<span>Showing ${Math.min(total, PAGE_SIZE)} of ${total} records</span>`;
+  if (pages > 1) {
+    if (recipientPage > 0) pag.innerHTML += `<button class="btn btn-outline btn-sm" onclick="recipientPage--;renderRecipients(allRecipients)">← Prev</button>`;
+    if (recipientPage < pages-1) pag.innerHTML += `<button class="btn btn-outline btn-sm" onclick="recipientPage++;renderRecipients(allRecipients)">Next →</button>`;
+  }
+}
+
+function searchRecipients() {
+  const q = document.getElementById('recipientSearch').value.toLowerCase();
+  filterRecipients(q);
+}
+
+function filterRecipients(search) {
+  const q = search !== undefined ? search : document.getElementById('recipientSearch').value.toLowerCase();
+  const lga = document.getElementById('filterLGA').value;
+  const state = document.getElementById('filterState').value;
+  let filtered = allRecipients;
+  if (q)     filtered = filtered.filter(r => (r.phone+'').includes(q) || (r.name||'').toLowerCase().includes(q));
+  if (lga)   filtered = filtered.filter(r => r.lga === lga);
+  if (state) filtered = filtered.filter(r => r.state === state);
+  recipientPage = 0;
+  renderRecipients(filtered);
+}
+
+// ── CSV IMPORT ────────────────────────────────────────────────────
+async function importCSV() {
+  const file = document.getElementById('csvFile').files[0];
+  if (!file) { showToast('Please select a CSV file', 'err'); return; }
+  const log = document.getElementById('importLog');
+  log.style.display = 'block';
+  log.innerHTML = '<div class="log-line info">Reading file…</div>';
+  const text = await file.text();
+  const lines = text.trim().split('\n');
+  const headers = lines[0].split(',').map(h => h.trim().toLowerCase());
+  const get = (row, key) => { const i = headers.indexOf(key); return i>=0 ? (row[i]||'').trim() : ''; };
+  const btn = document.getElementById('importBtn');
+  btn.disabled = true;
+  let added = 0, skipped = 0;
+  const { collection, addDoc } = m();
+  for (let i = 1; i < lines.length; i++) {
+    const row = lines[i].split(',');
+    const phone = get(row,'phone');
+    if (!phone) { skipped++; continue; }
+    try {
+      await addDoc(collection(db(),'recipients'), {
+        phone, name: get(row,'name'), state: get(row,'state'),
+        lga: get(row,'lga'), ward: get(row,'ward'),
+        language: get(row,'language'), group: get(row,'group'),
+        optedOut: false, importedAt: new Date().toISOString()
+      });
+      added++;
+      if (added % 10 === 0) log.innerHTML += `<div class="log-line ok">✓ Added ${added} records…</div>`;
+      log.scrollTop = log.scrollHeight;
+    } catch(e) { skipped++; }
+  }
+  log.innerHTML += `<div class="log-line ok">✅ Done — ${added} added, ${skipped} skipped.</div>`;
+  btn.disabled = false;
+  showToast(`Import complete: ${added} recipients added`, 'ok');
+  loadOverviewStats();
+}
+
+// ── CAMPAIGNS LIST ────────────────────────────────────────────────
+async function loadAllCampaigns() {
+  const { collection, query, orderBy, limit, getDocs } = m();
+  const q = query(collection(db(),'campaigns'), orderBy('scheduledAt','desc'), limit(50));
+  const snap = await getDocs(q);
+  const tbody = document.getElementById('allCampaignRows');
+  if (snap.empty) { tbody.innerHTML = '<tr><td colspan="7"><div class="empty"><p>No campaigns yet</p></div></td></tr>'; return; }
+  let html = '';
+  snap.forEach(d => {
+    const c = d.data(); const id = d.id;
+    const tq = c.targetQuery || {};
+    const target = [tq.state, tq.lga, tq.ward].filter(Boolean).join(' › ') || 'All';
+    const date = c.scheduledAt?.toDate ? c.scheduledAt.toDate().toLocaleDateString() : '—';
+    html += `<tr>
+      <td>${c.name||'—'}</td>
+      <td><span class="badge ${c.type==='voice'?'badge-blue':'badge-green'}">${c.type||'wa'}</span></td>
+      <td style="font-size:12px;">${target}</td>
+      <td style="min-width:120px;"><div class="progress-wrap"><div class="progress-bar ${c.type==='voice'?'bar-blue':'bar-green'}" style="width:${c.progress||0}%"></div></div><div style="font-size:11px;color:var(--muted);margin-top:3px">${c.progress||0}%</div></td>
+      <td>${statusBadge(c.status)}</td>
+      <td style="font-size:12px;">${date}</td>
+      <td>
+        ${c.status==='running'?`<button class="btn btn-danger btn-sm" onclick="pauseCampaign('${id}')">Pause</button>`:''}
+        ${c.status==='paused'?`<button class="btn btn-outline btn-sm" onclick="resumeCampaign('${id}')">Resume</button>`:''}
+      </td>
+    </tr>`;
+  });
+  tbody.innerHTML = html;
+}
+
+async function loadCampaignHistory(type) {
+  const { collection, query, where, orderBy, limit, getDocs } = m();
+  const q = query(collection(db(),'campaigns'), where('type','==',type), orderBy('scheduledAt','desc'), limit(20));
+  const snap = await getDocs(q);
+  const tbodyId = type === 'voice' ? 'roboCampaignRows' : 'waCampaignRows';
+  const tbody = document.getElementById(tbodyId);
+  if (!tbody) return;
+  if (snap.empty) { tbody.innerHTML = '<tr><td colspan="6"><div class="empty"><p>No campaigns yet</p></div></td></tr>'; return; }
+  let html = '';
+  snap.forEach(d => {
+    const c = d.data();
+    const tq = c.targetQuery || {};
+    const target = [tq.state, tq.lga].filter(Boolean).join(' › ') || 'All';
+    const date = c.scheduledAt?.toDate ? c.scheduledAt.toDate().toLocaleDateString() : '—';
+    if (type === 'voice') {
+      html += `<tr><td>${c.name}</td><td>${target}</td><td>${c.callsPlaced||0}</td><td>${c.optouts||0}</td><td>${statusBadge(c.status)}</td><td>${date}</td></tr>`;
+    } else {
+      html += `<tr><td>${c.name}</td><td>${target}</td><td>${c.sent||0}</td><td>${statusBadge(c.status)}</td><td>${date}</td></tr>`;
+    }
+  });
+  tbody.innerHTML = html;
+}
+
+async function pauseCampaign(id) {
+  const { doc, updateDoc } = m();
+  await updateDoc(doc(db(),'campaigns',id), { status: 'paused' });
+  showToast('Campaign paused', 'ok');
+  loadAllCampaigns();
+}
+
+async function resumeCampaign(id) {
+  const { doc, updateDoc } = m();
+  await updateDoc(doc(db(),'campaigns',id), { status: 'scheduled', _processing: false });
+  showToast('Campaign resumed', 'ok');
+  loadAllCampaigns();
+}
+
+// ── LOGS ──────────────────────────────────────────────────────────
+async function loadLogs() {
+  const { collection, query, where, orderBy, limit, getDocs } = m();
+  // Stats
+  const [sends, voice, optouts, replies] = await Promise.all([
+    countCollection('sends'),
+    countCollection('voiceLogs'),
+    countCollection('recipients', where('optedOut','==',true)),
+    countCollection('responses'),
+  ]);
+  document.getElementById('log-stat-sends').textContent = fmt(sends);
+  document.getElementById('log-stat-voice').textContent = fmt(voice);
+  document.getElementById('log-stat-optouts').textContent = fmt(optouts);
+  document.getElementById('log-stat-replies').textContent = fmt(replies);
+
+  // Opt-outs
+  try {
+    const oq = query(collection(db(),'voiceLogs'), where('action','==','optOut'), orderBy('time','desc'), limit(20));
+    const oSnap = await getDocs(oq);
+    const oTbody = document.getElementById('optoutRows');
+    if (oSnap.empty) { oTbody.innerHTML = '<tr><td colspan="3"><div class="empty"><p>No opt-outs recorded</p></div></td></tr>'; }
+    else {
+      oTbody.innerHTML = '';
+      oSnap.forEach(d => {
+        const r = d.data();
+        const t = r.time?.toDate ? r.time.toDate().toLocaleString() : '—';
+        oTbody.innerHTML += `<tr><td>${r.phone||'—'}</td><td>${r.by||'—'}</td><td style="font-size:12px;">${t}</td></tr>`;
+      });
+    }
+  } catch(e) {}
+
+  // Replies
+  try {
+    const rq = query(collection(db(),'responses'), orderBy('receivedAt','desc'), limit(20));
+    const rSnap = await getDocs(rq);
+    const rTbody = document.getElementById('replyRows');
+    if (rSnap.empty) { rTbody.innerHTML = '<tr><td colspan="3"><div class="empty"><p>No replies yet</p></div></td></tr>'; }
+    else {
+      rTbody.innerHTML = '';
+      rSnap.forEach(d => {
+        const r = d.data();
+        const t = r.receivedAt?.toDate ? r.receivedAt.toDate().toLocaleString() : '—';
+        rTbody.innerHTML += `<tr><td>${r.phone||'—'}</td><td>${(r.text||'').substring(0,60)}</td><td style="font-size:12px;">${t}</td></tr>`;
+      });
+    }
+  } catch(e) {}
+
+  // Send logs
+  try {
+    const sq = query(collection(db(),'sends'), orderBy('attemptAt','desc'), limit(30));
+    const sSnap = await getDocs(sq);
+    const sTbody = document.getElementById('sendLogRows');
+    if (sSnap.empty) { sTbody.innerHTML = '<tr><td colspan="5"><div class="empty"><p>No logs yet</p></div></td></tr>'; }
+    else {
+      sTbody.innerHTML = '';
+      sSnap.forEach(d => {
+        const s = d.data();
+        const t = s.attemptAt?.toDate ? s.attemptAt.toDate().toLocaleString() : '—';
+        sTbody.innerHTML += `<tr><td style="font-size:12px;">${s.campaignId||'—'}</td><td>${s.recipientId||'—'}</td><td>${s.senderId||'—'}</td><td><span class="status-dot dot-green"></span>${s.status||'sent'}</td><td style="font-size:12px;">${t}</td></tr>`;
+      });
+    }
+  } catch(e) {}
+}
+
+// ── SENDERS ───────────────────────────────────────────────────────
+async function loadSenders() {
+  const { collection, getDocs } = m();
+  const snap = await getDocs(collection(db(),'senders'));
+  const tbody = document.getElementById('senderRows');
+  if (snap.empty) { tbody.innerHTML = '<tr><td colspan="5"><div class="empty"><p>No senders configured</p></div></td></tr>'; return; }
+  let html = '';
+  snap.forEach(d => {
+    const s = d.data(); const id = d.id;
+    const isActive = s.status === 'active';
+    html += `<tr>
+      <td>${id}</td>
+      <td>${s.dailyLimit||3000}</td>
+      <td>—</td>
+      <td><span class="status-dot ${isActive?'dot-green':'dot-yellow'}"></span>${s.status||'unknown'}</td>
+      <td>
+        ${isActive?`<button class="btn btn-danger btn-sm" onclick="toggleSender('${id}','paused')">Pause</button>`:`<button class="btn btn-outline btn-sm" onclick="toggleSender('${id}','active')">Activate</button>`}
+      </td>
+    </tr>`;
+  });
+  tbody.innerHTML = html;
+}
+
+async function addSender() {
+  const id    = document.getElementById('newSenderId').value.trim();
+  const limit = parseInt(document.getElementById('newSenderLimit').value) || 300;
+  if (!id) { showToast('Sender ID is required', 'err'); return; }
+  const { doc, updateDoc, collection, addDoc } = m();
+  try {
+    const { setDoc } = await import('https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js');
+    await setDoc(doc(db(),'senders',id), { status: 'active', dailyLimit: limit, createdAt: new Date().toISOString() });
+    document.getElementById('addSenderModal').classList.remove('open');
+    showToast('Sender added', 'ok');
+    loadSenders();
+  } catch(e) { showToast('Error: '+e.message, 'err'); }
+}
+
+async function toggleSender(id, newStatus) {
+  const { doc, updateDoc } = m();
+  await updateDoc(doc(db(),'senders',id), { status: newStatus });
+  showToast('Sender updated', 'ok');
+  loadSenders();
+}
+
+// ── UTILITIES ─────────────────────────────────────────────────────
+function fmt(n) { return typeof n === 'number' ? n.toLocaleString() : n; }
+
+function statusBadge(status) {
+  const map = {
+    scheduled: 'badge-yellow', running: 'badge-green', completed: 'badge-blue',
+    paused: 'badge-red', failed: 'badge-red'
+  };
+  return `<span class="badge ${map[status]||'badge-blue'}">${status||'unknown'}</span>`;
+}
+
+let toastTimer;
+function showToast(msg, type='ok') {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.className = 'show ' + type;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { el.className = ''; }, 3500);
+}
+
+// Close modals on overlay click
+document.querySelectorAll('.modal-overlay').forEach(overlay => {
+  overlay.addEventListener('click', e => { if (e.target === overlay) overlay.classList.remove('open'); });
+});
+</script>
+</body>
+</html>
